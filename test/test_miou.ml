@@ -120,5 +120,62 @@ let test02 =
       Alcotest.(check pass) "truncated input" () ()
   | Error (`Msg err) -> Alcotest.failf "Unexpected error: %s." err
 
+let fail_if_locked f =
+  let fail_prm =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 1. ;
+    Alcotest.failf "Bounded_stream is locked" in
+  match Miou.await_first [ fail_prm; Miou.async f ] with
+  | Error exn -> Miou.reraise exn
+  | Ok () -> ()
+
+(* check that bs of size n actually hold n item *)
+let test_bs_01 =
+  Alcotest.test_case "bounded stream" `Quick @@ fun () ->
+  Miou_unix.run @@ fun () ->
+  let open Bounded_stream in
+  let f () =
+    let n = 1 in
+    let bs = create n in
+    put bs 0 ;
+    ignore (get bs) ;
+    close bs ;
+    Alcotest.(check pass) "ok bs" () () in
+  fail_if_locked f
+
+(* Bounded_stream.put wait if bs is full
+   and fail if stream is closed while waiting (previously it was not waked up)
+   so users of Bounded_stream must be carefull to close only after all puts are done.
+   This would fail:
+     let prm0 = Miou.async @@ fun () -> put bs 0 in
+     let prm1 = Miou.async @@ fun () -> put bs 1 in
+     let prm2 = Miou.async @@ fun () -> close bs in
+     let l = [ prm0; prm1; prm2 ] in
+     Miou.await_all l
+     |> List.iter (function Error exn -> Miou.reraise exn | Ok () -> ()) ;
+   *)
+let test_bs_02 =
+  Alcotest.test_case "bounded stream" `Quick @@ fun () ->
+  Miou_unix.run @@ fun () ->
+  let open Bounded_stream in
+  let f () =
+    let n = 1 in
+    let bs = create (n + 1) in
+    let prm_put =
+      Miou.async @@ fun () ->
+      put bs 0 ;
+      put bs 1 ;
+      close bs in
+    let prm_get = Miou.async @@ fun () -> ignore (get bs) in
+    let l = [ prm_put; prm_get ] in
+    Miou.await_all l
+    |> List.iter (function Error exn -> Miou.reraise exn | Ok () -> ()) ;
+    Alcotest.(check pass) "ok bs" () () in
+  fail_if_locked f
+
 let () =
-  Alcotest.run "multipart_form_miou" [ ("truncated", [ test01; test02 ]) ]
+  Alcotest.run "multipart_form_miou"
+    [
+      ("truncated", [ test01; test02 ]);
+      ("bounded_stream", [ test_bs_01; test_bs_02 ]);
+    ]

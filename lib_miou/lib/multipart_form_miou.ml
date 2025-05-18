@@ -28,19 +28,27 @@ module Bounded_stream = struct
   let put t data =
     Miou.Mutex.protect t.lock @@ fun () ->
     if t.closed then invalid_arg "Bounded_stream.put closed stream" ;
-    while (t.wr_pos + 1) mod Array.length t.buffer = t.rd_pos do
+    while
+      (t.wr_pos + 1) mod Array.length t.buffer = t.rd_pos
+      && Option.is_some t.buffer.(t.rd_pos)
+      && not t.closed
+    do
       Miou.Condition.wait t.non_full t.lock
     done ;
+    if t.closed
+    then failwith "Bounded_stream.put stream was closed before put was done" ;
     t.buffer.(t.wr_pos) <- Some data ;
     t.wr_pos <- (t.wr_pos + 1) mod Array.length t.buffer ;
     Miou.Condition.signal t.non_empty
 
   let get t =
     Miou.Mutex.protect t.lock @@ fun () ->
-    while t.wr_pos = t.rd_pos && not t.closed do
+    while
+      t.wr_pos = t.rd_pos && Option.is_none t.buffer.(t.rd_pos) && not t.closed
+    do
       Miou.Condition.wait t.non_empty t.lock
     done ;
-    if t.closed && t.wr_pos = t.rd_pos
+    if t.closed && t.wr_pos = t.rd_pos && Option.is_none t.buffer.(t.rd_pos)
     then None
     else
       let data = t.buffer.(t.rd_pos) in
@@ -52,7 +60,9 @@ module Bounded_stream = struct
   let close t =
     Miou.Mutex.protect t.lock @@ fun () ->
     t.closed <- true ;
-    Miou.Condition.signal t.non_empty
+    Miou.Condition.signal t.non_full ;
+    Miou.Condition.signal t.non_empty ;
+    ()
 
   let rec iter fn t =
     match get t with

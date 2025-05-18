@@ -45,7 +45,7 @@
  (enabled_if
   (>= %{ocaml_version} "5.0"))
  (modules test_miou)
- (libraries alcotest logs.fmt multipart_form-miou))
+ (libraries alcotest logs.fmt multipart_form-miou miou.unix))
 
 (rule
  (alias runtest)
